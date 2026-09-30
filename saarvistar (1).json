@@ -1,0 +1,858 @@
+{
+  "name": "saarvistar",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "789c2a39-ea9d-421c-8557-135daab44817",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "02b53952-83fa-49e6-ac53-f136db1313c8",
+      "name": "Content Intake Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -1056,
+        -1120
+      ],
+      "webhookId": "789c2a39-ea9d-421c-8557-135daab44817"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "file-check",
+              "leftValue": "={{ Object.keys($binary || {}).length }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "d9ad4163-368f-4894-befb-92aaf799537b",
+      "name": "Has Files?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -784,
+        -1184
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Emit one item per uploaded file so Extract from File can process each PDF independently.\nconst item = $input.first();\nconst bin = item.binary || {};\nconst out = [];\nfor (const key of Object.keys(bin)) {\n  out.push({ json: { source_file: bin[key].fileName || key }, binary: { file: bin[key] } });\n}\nreturn out;"
+      },
+      "id": "c8067ecd-6cdc-461e-9025-5e593bfb654c",
+      "name": "Prepare File Items",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -720,
+        -976
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "pdf",
+        "binaryPropertyName": "file",
+        "options": {
+          "joinPages": true
+        }
+      },
+      "id": "d20f25ba-f8ea-412b-9070-caa91f92ae9e",
+      "name": "Extract Text From PDF",
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1.1,
+      "position": [
+        -560,
+        -1280
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Combine text extracted from ALL uploaded files with any body text into one source.\nconst wb = $('Content Intake Webhook').item.json.body || {};\nconst bodyText = (wb.source_text || '').toString().trim();\nconst fileChunks = $input.all()\n  .map((i) => (i.json.text || '').toString().trim())\n  .filter(Boolean);\nconst parts = [];\nif (bodyText) parts.push(bodyText);\nfor (const c of fileChunks) parts.push(c);\nconst source_text = parts.join('\\n\\n---\\n\\n');\nreturn [{\n  json: {\n    source_text,\n    user_instruction: (wb.user_prompt || '').toString().trim(),\n    input_type: 'mixed',\n    output_types: Array.isArray(wb.output_types) ? wb.output_types : [],\n  },\n}];"
+      },
+      "id": "c3450814-6e75-42a4-9217-f4b07e65399d",
+      "name": "Aggregate File Text",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -336,
+        -1280
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const src = ($json.source_text || '').toString().trim();\nconst types = Array.isArray($json.output_types) ? $json.output_types : [];\nlet error_message = \"\";\nif (!src) {\n  error_message = \"No source content could be read. Provide non-empty source_text and/or one or more readable PDF files. DOCX extraction is not supported yet.\";\n} else if (types.length === 0) {\n  error_message = \"output_types is empty or missing. Provide at least one of: exec_summary, public_advisory, linkedin_post, twitter_thread.\";\n}\nreturn {\n  json: {\n    source_text: src,\n    user_instruction: ($json.user_instruction || '').toString().trim(),\n    input_type: $json.input_type,\n    output_types: types,\n    is_valid: error_message === \"\",\n    error_message,\n  },\n};"
+      },
+      "id": "de80122a-b30f-4530-b887-985ae82db9c7",
+      "name": "Validate Source & Types",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -112,
+        -1184
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "valid-check",
+              "leftValue": "={{ $json.is_valid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "19ef03d1-cb79-4144-b1eb-97aef9141ccc",
+      "name": "Has Valid Input?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        112,
+        -1184
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.source_text }}",
+        "options": {
+          "systemMessage": "You are a text normalization and entity-verification step in a content transformation pipeline.\n\nYour task is to take raw source_text and:\n\n1. **Correct spelling errors in common words**\n   (e.g. \"presisdent\" -> \"president\", \"brics\" -> \"BRICS\")\n\n2. **Correct misspelled proper nouns** — names of people, places, organizations, titles —\n   to standard, real-world spellings. Examples:\n   - \"zenpink\" -> \"Xi Jinping\"\n   - \"puttin\" -> \"Putin\"\n   - \"Presisdent of Germany\" -> identify that this is factually wrong; Germany's head is Chancellor, not President\n\n3. **Fix internally inconsistent facts** — if a person's country or title doesn't match\n   well-established public knowledge, correct it. Examples:\n   - \"Putin, President of Germany\" -> \"Putin, President of Russia\"\n   - Keep only corrections you are confident about; never guess or invent new details\n\n4. **Preserve original meaning, tone, and structure.** Do not summarize, expand, or add commentary.\n\n5. **At the very end, append a line listing every correction made**, in this exact format:\n\n   CORRECTIONS: [\"error1\" -> \"correction1\", \"error2\" -> \"correction2\"]\n\n   If no corrections were made, write:\n   CORRECTIONS: []\n\nOutput ONLY the corrected text, followed by a newline, then the CORRECTIONS line. Nothing else."
+        }
+      },
+      "id": "1d55ceb5-bb24-4655-af7a-21468aa8bd24",
+      "name": "Normalize & Verify Input",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        752,
+        -1360
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const raw = $('Validate Source & Types').item.json;\nconst out = ($json.output || '').toString();\nconst idx = out.lastIndexOf('CORRECTIONS:');\nlet corrected = out;\nlet corrections = '[]';\nif (idx !== -1) {\n  corrected = out.slice(0, idx).replace(/\\s+$/, '');\n  corrections = out.slice(idx + 'CORRECTIONS:'.length).trim();\n}\nconst finalText = (corrected || '').trim() || raw.source_text;\nreturn {\n  json: {\n    source_text: finalText,\n    source_text_raw: raw.source_text,\n    corrections,\n    user_instruction: raw.user_instruction || '',\n    input_type: raw.input_type,\n    output_types: raw.output_types,\n  },\n};"
+      },
+      "id": "48704130-6344-4dea-8bbf-b552f56d3714",
+      "name": "Apply Normalization",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1104,
+        -1456
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first().json;\nconst types = Array.isArray(item.output_types) ? item.output_types : [];\nreturn types.map((t) => ({\n  json: {\n    source_text: item.source_text,\n    user_instruction: item.user_instruction || '',\n    output_type: t,\n  },\n}));"
+      },
+      "id": "c246b8aa-0277-4d35-92be-6fc3c2f1e16a",
+      "name": "Fan Out Output Types",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1536,
+        -1296
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const NO_INVENT = \"Base every statement strictly on the SOURCE CONTENT below. Do not invent facts, numbers, names, dates, or details that are not present in the source. If the source lacks a detail, omit it rather than guessing.\";\n\nconst TEMPLATES = {\n  exec_summary: { label: \"Executive Summary\", system: \"You are writing a professional cybersecurity intelligence brief in \\\"Exclusive Summary\\\" format.\\n\\nSTRUCTURE — Follow this exact order, with each section clearly labeled:\\n\\n1. **HEADLINE** (top, specific not sensational)\\n   Example: \\\"Exclusive: Phishing Campaign Targets Employees Through Fake Microsoft 365 Login Pages\\\"\\n   Do not use vague titles like \\\"Major Cyber Attack Happened\\\"\\n\\n2. **METADATA BOX** (appears just below headline)\\n   Format:\\n   THREAT: [type, e.g. Credential Phishing]\\n   TARGET: [who is affected, e.g. Business Users]\\n   SEVERITY: [Low/Medium/High/Critical]\\n   STATUS: [Monitoring/Active/Resolved/Critical/Information]\\n   LAST UPDATED: [today's date]\\n\\n3. **EXECUTIVE SUMMARY** (3-5 sentences max)\\n   Must answer: What is the threat + Who is targeted + Method + Impact + Current status\\n   A reader who reads only this section should still understand the incident.\\n\\n4. **WHAT HAPPENED?** (2-3 paragraphs, verified facts only)\\n   Stick to what is known. Do not make assumptions.\\n   Distinguish between confirmed facts and analysis.\\n\\n5. **WHO MAY BE AFFECTED?** (clear, specific scoping)\\n   Example: \\\"Employees using cloud-based business services, Organizations using web-based authentication\\\"\\n   Do not generalize beyond available evidence.\\n\\n6. **ATTACK CHAIN** (simple, step-by-step with arrows and emojis)\\n   Format example:\\n   📩 Phishing email\\n   ↓\\n   🔗 Malicious link\\n   ↓\\n   🌐 Fake login page\\n   ↓\\n   🔐 Credentials entered\\n\\n7. **POTENTIAL IMPACT** (two parts: confirmed vs. potential)\\n   Label clearly:\\n   \\\"Observed Impact: [what definitely happened]\\\"\\n   \\\"Potential Impact: [what could happen] with bullet points\\\"\\n   Never state unverified claims as fact.\\n\\n8. **KEY FINDINGS** (3-5 important points, bulleted)\\n   Example: \\\"🔹 Attackers are using trusted-brand impersonation\\\"\\n\\n9. **WHY IT MATTERS** (1-2 paragraphs, evidence-grounded significance)\\n   Explain the broader context. Keep grounded in facts, not speculation.\\n\\n10. **CURRENT STATUS** (one status label + explanation)\\n    Example: \\\"🟠 **Monitoring** — The activity remains under observation...\\\"\\n\\n11. **RECOMMENDED ACTIONS** (5-7 practical, directly relevant steps)\\n    Start with: \\\"Organizations should:\\\"\\n    Use checkmarks: ✅ [action]\\n\\n12. **INDICATORS OF COMPROMISE** (only if verified indicators exist, otherwise omit)\\n    Format:\\n    Malicious Domains: [list]\\n    URLs: [list, defanged]\\n    IP Addresses: [list]\\n    File Hashes: [if available]\\n\\n13. **SOURCES** (list what informed the analysis)\\n    Distinguish: confirmed facts vs. researcher analysis vs. unverified claims\\n\\n14. **LAST UPDATED** (today's date)\\n\\nTONE: Professional, analytical, formal. No jargon; write for security professionals and informed non-technical readers.\\nDo not use conversational language, emoji outside the structured sections, or editorial commentary.\\n\\nOUTPUT FORMATTING (CRITICAL):\\nReturn the final result wrapped inside a single fenced code block (triple backticks),\\nwith nothing before or after it. Preserve every line break, blank line, and gap between\\nsections exactly as structured above — do not collapse blank lines or merge sections\\ntogether. This ensures the spacing and structure survive when the user copies and\\npastes the output elsewhere.\", user: \"Produce the Executive Summary now, based only on the source content.\" },\n  public_advisory: { label: \"Public Advisory\", system: \"You are writing an official cybersecurity public advisory. This is a formal warning document.\\n\\nSTRUCTURE — Follow this exact order, with each section clearly labeled:\\n\\n1. **ADVISORY HEADER** (top, establishes formality)\\n   Format:\\n   CYBERSECURITY PUBLIC ADVISORY\\n\\n   Advisory ID: [CSA-2026-XXX or similar]\\n   Date: [today]\\n   Severity: High / Medium / Low / Critical\\n   Threat Category: [e.g. Phishing / Credential Theft]\\n   Status: Active Threat / Monitoring / Resolved\\n\\n2. **TITLE** (clear description, not vague)\\n   ✅ \\\"Public Advisory: Phishing Campaign Targeting Business Users with Fake Microsoft 365 Pages\\\"\\n   ❌ \\\"Important Cybersecurity Alert\\\"\\n\\n3. **THREAT SUMMARY** (2-4 sentences, answer \\\"What is happening?\\\")\\n   Example: \\\"A phishing campaign has been observed using fraudulent messages that impersonate\\n   financial service providers. The messages attempt to create urgency and direct recipients\\n   to fraudulent websites designed to collect login credentials and other sensitive information.\\\"\\n\\n4. **WHO MAY BE AFFECTED?** (clearly scoped audience)\\n   \\\"This advisory is relevant to:\\n   • Banking customers\\n   • Users receiving unsolicited account-verification messages\\n   • Organizations whose employees use online financial services\\n   • Individuals who interact with links received through SMS, email, or messaging applications\\\"\\n\\n5. **POTENTIAL IMPACT** (what could happen if someone falls for it)\\n   Factual, not exaggerated.\\n   \\\"If the attacker successfully obtains the victim's credentials, the stolen information\\n   may potentially be used for:\\n   • Unauthorized account access\\n   • Identity theft\\n   • Financial fraud\\n   • Further phishing attempts\\\"\\n\\n6. **COMMON WARNING SIGNS** (concrete, checkable indicators)\\n   \\\"Users should be cautious of messages containing:\\n   ⚠️ Unexpected account-security warnings\\n   ⚠️ Requests to 'verify immediately'\\n   ⚠️ Suspicious or shortened URLs\\n   ⚠️ Unknown senders\\n   ⚠️ Requests for passwords, OTPs, or payment information\\n   ⚠️ Spelling, branding, or formatting inconsistencies\\\"\\n\\n7. **RECOMMENDED ACTIONS** (split into two sub-sections)\\n\\n   A) \\\"If you receive a suspicious message:\\\"\\n   ✅ Do not click the provided link\\n   ✅ Do not provide your password or OTP\\n   ✅ Close the message and access the official website manually\\n   ✅ Verify the request through an official channel\\n   ✅ Report the message to the relevant organization\\n   ✅ Delete the suspicious message after reporting\\n\\n   B) \\\"If credentials were already entered:\\\"\\n   🔐 Change the affected password immediately\\n   🔐 Enable Multi-Factor Authentication\\n   🔐 Review recent account activity\\n   🔐 Contact the relevant service provider\\n   🔐 Monitor for unauthorized activity\\n\\n8. **HOW TO STAY PROTECTED** (longer-term preventive measures)\\n   \\\"Users are encouraged to:\\n   • Enable Multi-Factor Authentication\\n   • Use unique passwords for important accounts\\n   • Keep operating systems and applications updated\\n   • Avoid clicking unsolicited links\\n   • Verify requests through trusted channels\\n   • Use reputable security software\\n   • Regularly review account activity\\\"\\n\\n9. **REPORTING** (where to report incidents)\\n   \\\"Users who believe they have interacted with a malicious message should report the\\n   incident to:\\n   • Their organization's IT/security team\\n   • The relevant service provider\\n   • Appropriate national or local cybercrime reporting channels\\\"\\n\\n10. **REFERENCES** (sources informing the advisory)\\n    List: Official advisories, vendor bulletins, government/CERT guidance, verified sources\\n\\n11. **CONTACT** (official point of contact)\\n    Format:\\n    \\\"For assistance:\\n    **Security Team:** security@example.org\\n    **Website:** example.org/security\\\"\\n\\n12. **LAST UPDATED** (date)\\n\\nTONE: Formal, official, action-oriented. No conversational language or emoji except\\nwhere specifically noted (✅, 🔐, ⚠️). Write for a mixed audience: technical and\\nnon-technical users. Every statement must be factual and verifiable.\\n\\nOUTPUT FORMATTING (CRITICAL):\\nReturn the final result wrapped inside a single fenced code block (triple backticks),\\nwith nothing before or after it. Preserve every line break, blank line, and gap between\\nsections exactly as structured above — do not collapse blank lines or merge sections\\ntogether. This ensures the spacing and structure survive when the user copies and\\npastes the output elsewhere.\", user: \"Produce the Public Advisory now, based only on the source content.\" },\n  linkedin_post: { label: \"LinkedIn Post\", system: \"You are writing a professional yet engaging LinkedIn post about a cybersecurity threat.\\n\\nSTRUCTURE — Follow this exact flow:\\n\\n1. **🚨 HOOK** (1-2 opening sentences)\\n   Create curiosity, urgency, or surprise. Make the reader want to click \\\"See more\\\"\\n   Examples:\\n   - \\\"🚨 One careless click can give attackers access to your account.\\\"\\n   - \\\"⚠️ That 'urgent' email from your bank might not actually be from your bank.\\\"\\n\\n2. **⚠️ INTRODUCE THE THREAT** (name it, explain why it matters)\\n   Example: \\\"**Threat: Phishing** — Phishing is a cyberattack where attackers impersonate\\n   trusted individuals or organizations to trick users into revealing sensitive information...\\\"\\n\\n3. **🔍 HOW IT WORKS** (simple, non-technical attack chain)\\n   Use arrows (↓) and emojis to show flow:\\n   🔗 You click the malicious link\\n   ↓\\n   🌐 You land on a fake website\\n   ↓\\n   🔐 You enter your credentials\\n   ↓\\n   🎯 The attacker captures your information\\n\\n4. **🛡️ HOW TO PROTECT YOURSELF** (5-7 practical, checkable actions)\\n   Use checkmarks: ✅ [action]\\n   Examples:\\n   - ✅ Check the sender's email address carefully\\n   - ✅ Verify the website URL before logging in\\n   - ✅ Enable Multi-Factor Authentication (MFA)\\n   - ✅ Never share passwords or OTPs\\n\\n5. **💡 KEY TAKEAWAY** (one memorable, quotable line)\\n   Example: \\\"💡 Cybersecurity isn't only about advanced technology.\\n   Awareness is often your first line of defense.\\\"\\n\\n6. **📢 CALL TO ACTION** (ask a question, encourage sharing)\\n   Example: \\\"📢 Have you ever received a suspicious message that looked completely legitimate?\\n   Share this post to help others recognize phishing attempts.\\\"\\n\\n7. **HASHTAGS** (5-8 relevant hashtags, at the very end only)\\n   Example: #CyberSecurity #CyberThreats #CyberAwareness #InformationSecurity\\n\\nTONE: Professional but conversational. Engaging, educational, relatable.\\nEach section should flow naturally. Use line breaks for readability.\\nMake it feel like advice from a peer, not a lecture.\\n\\nLENGTH: ~400-600 words total\\n\\nOUTPUT FORMATTING (CRITICAL):\\nReturn the final result wrapped inside a single fenced code block (triple backticks),\\nwith nothing before or after it. Preserve every line break and blank line between\\nsections exactly as structured above — do not collapse blank lines or merge sections\\ntogether. This ensures the spacing and structure survive when the user copies and\\npastes the output into LinkedIn or elsewhere.\", user: \"Produce the LinkedIn post now, based only on the source content.\" },\n  twitter_thread: { label: \"Twitter/X Thread\", system: \"You are writing a cybersecurity X/Twitter thread. Keep it: SHORT + FAST + SCANNABLE + INFO-DENSE\\n\\nSTRUCTURE — Number each post. Aim for 6-10 posts total. Each post = ONE main idea.\\n\\n**POST 1 — HOOK** (one strong sentence, curiosity only)\\nDo NOT explain the threat yet. Make the reader want to open the thread.\\nExamples:\\n- \\\"🚨 A phishing attack doesn't always look suspicious anymore.\\\"\\n- \\\"⚠️ Your password may not be the only thing attackers are after.\\\"\\nFollow with: \\\"Here's how it works 🧵👇\\\"\\n\\n**POST 2 — IDENTIFY THE THREAT** (clearly name and define it)\\nFormat: \\\"**1/ 🧩 The Threat**\\\"\\nExample: \\\"Phishing is a social-engineering attack where criminals impersonate trusted\\npeople or organizations to trick users into revealing information or performing an unsafe action.\\\"\\nSimple enough for anyone to understand.\\n\\n**POST 3 — ATTACK CHAIN** (break into simple steps, use emoji + arrows)\\nFormat: \\\"**2/ 🔍 How it works**\\\"\\nExample:\\n\\\"📩 You receive a convincing message\\n🔗 You click the link\\n🌐 A fake website opens\\n🔐 You enter your credentials\\n🎯 The attacker captures them\\\"\\n\\n**POST 4 — WHY IT WORKS** (the social engineering angle)\\nFormat: \\\"**3/ 🎭 Why does it work?**\\\"\\nExample: \\\"The attacker creates urgency: 'Your account will be suspended today.'\\nThe victim becomes worried and acts quickly without verifying the message.\\nThe attack isn't always about breaking technology. Sometimes it's about manipulating people.\\\"\\n\\n**POST 5 — WARNING SIGNS** (practical, checkable indicators)\\nFormat: \\\"**4/ 🚩 Watch for these signs**\\\"\\nExample:\\n\\\"• Unexpected login alerts\\n• Urgent requests\\n• Strange sender addresses\\n• Suspicious URLs\\n• Requests for OTPs/passwords\\n• Slightly altered company names\\nOne warning sign may not prove a message is malicious. Several together should make you stop.\\\"\\n\\n**POST 6 — WHAT TO DO** (protective actions)\\nFormat: \\\"**5/ 🛡️ What should you do?**\\\"\\nExample:\\n\\\"✅ Don't click immediately\\n✅ Verify the sender\\n✅ Check the domain carefully\\n✅ Open the official app/site yourself\\n✅ Enable MFA\\n✅ Report suspicious messages\\n✅ Never share OTPs or passwords\\n\\nWhen in doubt: **stop → verify → then act.**\\\"\\n\\n**POST 7 — EXTRA INSIGHT** (something beyond the obvious)\\nFormat: \\\"**6/ 🧠 One important point**\\\"\\nExample: \\\"Attackers don't always need to steal your password directly.\\nA stolen session token, reused password, malicious browser extension, or compromised device\\ncan also create opportunities for account compromise.\\\"\\n\\n**POST 8 — KEY TAKEAWAY** (one memorable conclusion)\\nFormat: \\\"**7/ 📌 Remember this**\\\"\\nExample: \\\"The most dangerous phishing message isn't necessarily the one that looks fake.\\nIt's the one that looks **normal enough that you stop questioning it.**\\nPause before you click.\\\"\\n\\n**POST 9 — CTA + HASHTAGS** (call to action, then hashtags)\\nFormat: \\\"**8/ 🔐 Stay safe**\\\"\\nExample: \\\"Save this thread for later.\\nShare it with someone who regularly handles sensitive accounts or financial information.\\nCybersecurity awareness starts with recognizing the threat.\\n\\n#CyberSecurity #CyberAwareness #InfoSec\\\"\\n\\nTONE: Short + punchy. Each post stands alone but connects to the previous one.\\nUse emoji strategically (not excessively). Emojis should clarify, not clutter.\\nWrite for general readers, not security experts. Avoid jargon.\\nOne idea per post. If you need to explain something complex, split it across 2 posts.\\n\\nLENGTH: Each post typically 150-280 characters (leave room for formatting and emoji)\\nTOTAL THREAD: 6-10 posts\\n\\nEMOJI USAGE:\\n- 🚨 = alarm/urgent\\n- 🧩 = component/threat type\\n- 🔍 = investigation/how-it-works\\n- 🎭 = social engineering/manipulation\\n- 🚩 = warning/red flag\\n- 🛡️ = defense/protection\\n- 🧠 = insight/wisdom\\n- 📌 = important\\n- 🔐 = security/safe\\n- ✅ = action/success\\n- • = bullet list\\n\\nUse arrows (↓, →) to show flow or progression.\\n\\nOUTPUT FORMATTING (CRITICAL):\\nReturn the final result wrapped inside a single fenced code block (triple backticks),\\nwith nothing before or after it. Preserve every line break and blank line between posts\\nexactly as structured above — do not collapse blank lines or merge posts together.\\nThis ensures the spacing and structure survive when the user copies and pastes the\\nthread elsewhere.\", user: \"Produce the Twitter/X thread now, based only on the source content.\" },\n};\n\nconst type = $json.output_type;\nconst instruction = ($json.user_instruction || '').toString().trim();\nconst tpl = TEMPLATES[type];\nif (!tpl) {\n  return { json: { source_text: $json.source_text, output_type: type, output_label: \"Unsupported\", system_prompt: \"\", user_prompt: \"\", supported: false } };\n}\nconst instructionBlock = instruction ? \"\\n\\nADDITIONAL USER INSTRUCTION (apply this to how you shape and analyze the output, but never contradict or override the SOURCE CONTENT or the no-invention rule):\\n\" + instruction : \"\";\nconst system_prompt = tpl.system + instructionBlock + \"\\n\\nSOURCE CONTENT:\\n\" + $json.source_text;\nreturn { json: { source_text: $json.source_text, output_type: type, output_label: tpl.label, system_prompt, user_prompt: tpl.user, supported: true } };"
+      },
+      "id": "f519a96b-f04a-4944-a1b0-28a101d97680",
+      "name": "Template Resolver",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1760,
+        -1296
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "supported-check",
+              "leftValue": "={{ $json.supported }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "1a81aa15-b235-4f66-9de0-1ac9efd3a7b9",
+      "name": "Supported Output Type?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1984,
+        -1296
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Builds the prompt for each generation attempt. On the first pass the input comes from\n// Template Resolver (system_prompt/user_prompt). On a retry it comes from Derive Verification\n// Result, carrying the auditor's feedback + previous output so the agent can fix unsupported claims.\nconst j = $json;\nconst isRetry = typeof j.verification_result === 'string' && j.verification_result.trim() !== '' && j.is_verified === false;\nconst base_system_prompt = j.base_system_prompt || j.system_prompt || '';\nconst base_user_prompt = j.base_user_prompt || j.user_prompt || '';\nconst attempt = isRetry ? (Number(j.attempt) || 1) + 1 : 1;\nlet system_prompt = base_system_prompt;\nif (isRetry) {\n  system_prompt = base_system_prompt +\n    \"\\n\\n=== REVISION REQUIRED (attempt \" + attempt + \") ===\\n\" +\n    \"A separate fact-checking auditor reviewed your previous output and found statements NOT supported by the SOURCE CONTENT. You MUST remove or correct EVERY flagged item, then regenerate the COMPLETE output while keeping all original format, tone, and length constraints. Do not introduce any new unsupported facts. If a detail is not in the source, omit it.\\n\\n\" +\n    \"YOUR PREVIOUS OUTPUT:\\n\" + (j.generated_text || '') + \"\\n\\n\" +\n    \"AUDITOR FEEDBACK (unsupported claims to fix):\\n\" + (j.verification_result || '');\n}\nreturn {\n  json: {\n    source_text: j.source_text,\n    output_type: j.output_type,\n    output_label: j.output_label,\n    base_system_prompt,\n    base_user_prompt,\n    system_prompt,\n    user_prompt: base_user_prompt,\n    attempt,\n  },\n};"
+      },
+      "id": "d4c673c7-b8d0-4a6f-a59b-5b9ff1f9fe6f",
+      "name": "Build Gen Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        768,
+        -608
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.user_prompt }}",
+        "options": {
+          "systemMessage": "={{ $json.system_prompt }}"
+        }
+      },
+      "id": "32f6a233-dfe1-463b-9e42-17fe23d22ef1",
+      "name": "Content Generation Agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        960,
+        -704
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const s = $('Build Gen Prompt').item.json;\nreturn {\n  json: {\n    source_text: s.source_text,\n    output_type: s.output_type,\n    output_label: s.output_label,\n    base_system_prompt: s.base_system_prompt,\n    base_user_prompt: s.base_user_prompt,\n    attempt: s.attempt,\n    generated_text: ($json.output || '').toString().trim(),\n  },\n};"
+      },
+      "id": "982a07c5-e289-4a09-8dab-d3bac6595ab4",
+      "name": "Store Generated Text",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1312,
+        -704
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Compare the GENERATED OUTPUT against the SOURCE. Identify any claim, number, or name in the GENERATED OUTPUT that is NOT supported by the SOURCE. Paraphrasing is acceptable; invented facts are not.\n\nRespond EXACTLY with \"VERIFIED: No unsupported claims.\" if nothing is unsupported. Otherwise respond with a bulleted list under the heading \"UNSUPPORTED CLAIMS:\".\n\nSOURCE:\n{{ $json.source_text }}\n\nGENERATED OUTPUT:\n{{ $json.generated_text }}",
+        "options": {
+          "systemMessage": "You are a meticulous fact-checking auditor. Your ONLY job is to compare a generated output against its source text and flag any claim, number, name, date, or detail in the generated output that is not supported by the source. You never rewrite, improve, or generate content. Paraphrasing that preserves meaning is acceptable; facts absent from the source are unsupported. Be strict and literal."
+        }
+      },
+      "id": "31b32567-1e8e-41f2-8fe2-444b09d3dae7",
+      "name": "Accuracy Checking Agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        1536,
+        -704
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const s = $('Store Generated Text').item.json;\nconst v = ($json.output || '').toString().trim();\nreturn {\n  json: {\n    source_text: s.source_text,\n    output_type: s.output_type,\n    output_label: s.output_label,\n    base_system_prompt: s.base_system_prompt,\n    base_user_prompt: s.base_user_prompt,\n    attempt: s.attempt,\n    generated_text: s.generated_text,\n    verification_result: v,\n    is_verified: v.startsWith(\"VERIFIED\"),\n  },\n};"
+      },
+      "id": "d74f7570-6b1f-4b98-9900-1cea0685a8b6",
+      "name": "Derive Verification Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1888,
+        -704
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "not-verified",
+              "leftValue": "={{ $json.is_verified }}",
+              "rightValue": false,
+              "operator": {
+                "type": "boolean",
+                "operation": "false",
+                "singleValue": true
+              }
+            },
+            {
+              "id": "under-max-attempts",
+              "leftValue": "={{ $json.attempt }}",
+              "rightValue": 3,
+              "operator": {
+                "type": "number",
+                "operation": "lt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "e710be45-0ec2-4c85-a425-f71d0697f314",
+      "name": "Needs Retry?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2336,
+        -400
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const norm = $('Apply Normalization').first().json;\nconst outputs = $input.all().map((i) => ({\n  output_type: i.json.output_type,\n  output_label: i.json.output_label,\n  generated_text: i.json.generated_text,\n  verification_result: i.json.verification_result,\n  is_verified: i.json.is_verified,\n}));\nreturn [{ json: { outputs, corrections: norm.corrections, source_text_raw: norm.source_text_raw } }];"
+      },
+      "id": "dbc5cc41-6bc5-47ef-bf22-0b64fa79fa02",
+      "name": "Aggregate Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2800,
+        -992
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"outputs\": $json.outputs, \"corrections\": $json.corrections, \"source_text_raw\": $json.source_text_raw } }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "3e2eedb5-1f60-40ae-9c16-060c30143ab6",
+      "name": "Respond With Outputs",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        3024,
+        -992
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "return {\n  json: {\n    output_type: $json.output_type,\n    output_label: \"Unsupported\",\n    generated_text: \"\",\n    verification_result: \"ERROR: Unrecognized output_type \\\"\" + $json.output_type + \"\\\". Supported values: exec_summary, public_advisory, linkedin_post, twitter_thread.\",\n    is_verified: false,\n  },\n};"
+      },
+      "id": "0f3957e0-dadf-486a-a7aa-0281fc88e399",
+      "name": "Mark Unsupported Type",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2832,
+        -576
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"error\": true, \"message\": $json.error_message } }}",
+        "options": {
+          "responseCode": 400
+        }
+      },
+      "id": "5fe5ea3a-f7d4-46fd-a594-8cf99518c71e",
+      "name": "Respond With Input Error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        560,
+        -592
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const wb = $json.body || {};\nconst src = (wb.source_text || '').toString().trim();\nreturn {\n  json: {\n    source_text: src,\n    user_instruction: (wb.user_prompt || '').toString().trim(),\n    input_type: wb.input_type,\n    output_types: Array.isArray(wb.output_types) ? wb.output_types : [],\n  },\n};"
+      },
+      "id": "3fc870af-5538-44b0-bb04-d5d3f39de3b0",
+      "name": "Normalize Text Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -336,
+        -1088
+      ]
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOllama",
+      "typeVersion": 1,
+      "position": [
+        784,
+        -1152
+      ],
+      "id": "a0f25921-26ab-4f33-b838-ebc3d142c57c",
+      "name": "Ollama Chat Model",
+      "credentials": {
+        "ollamaApi": {
+          "id": "pAqdEal3e5pW05Ts",
+          "name": "Ollama account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOllama",
+      "typeVersion": 1,
+      "position": [
+        960,
+        -464
+      ],
+      "id": "7827d534-a8ab-4a51-801d-521e7f10c675",
+      "name": "Ollama Chat Model1",
+      "credentials": {
+        "ollamaApi": {
+          "id": "pAqdEal3e5pW05Ts",
+          "name": "Ollama account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOllama",
+      "typeVersion": 1,
+      "position": [
+        1520,
+        -464
+      ],
+      "id": "ad19bc21-7714-4115-b492-b59b9d3c688a",
+      "name": "Ollama Chat Model2",
+      "credentials": {
+        "ollamaApi": {
+          "id": "pAqdEal3e5pW05Ts",
+          "name": "Ollama account"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Content Intake Webhook": {
+      "main": [
+        [
+          {
+            "node": "Has Files?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Files?": {
+      "main": [
+        [
+          {
+            "node": "Prepare File Items",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Normalize Text Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare File Items": {
+      "main": [
+        [
+          {
+            "node": "Extract Text From PDF",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Text From PDF": {
+      "main": [
+        [
+          {
+            "node": "Aggregate File Text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate File Text": {
+      "main": [
+        [
+          {
+            "node": "Validate Source & Types",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Source & Types": {
+      "main": [
+        [
+          {
+            "node": "Has Valid Input?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Valid Input?": {
+      "main": [
+        [
+          {
+            "node": "Normalize & Verify Input",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond With Input Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize & Verify Input": {
+      "main": [
+        [
+          {
+            "node": "Apply Normalization",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Apply Normalization": {
+      "main": [
+        [
+          {
+            "node": "Fan Out Output Types",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fan Out Output Types": {
+      "main": [
+        [
+          {
+            "node": "Template Resolver",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Template Resolver": {
+      "main": [
+        [
+          {
+            "node": "Supported Output Type?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supported Output Type?": {
+      "main": [
+        [
+          {
+            "node": "Build Gen Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Mark Unsupported Type",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Gen Prompt": {
+      "main": [
+        [
+          {
+            "node": "Content Generation Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Content Generation Agent": {
+      "main": [
+        [
+          {
+            "node": "Store Generated Text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Store Generated Text": {
+      "main": [
+        [
+          {
+            "node": "Accuracy Checking Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Accuracy Checking Agent": {
+      "main": [
+        [
+          {
+            "node": "Derive Verification Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Derive Verification Result": {
+      "main": [
+        [
+          {
+            "node": "Needs Retry?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Needs Retry?": {
+      "main": [
+        [
+          {
+            "node": "Build Gen Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Aggregate Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate Results": {
+      "main": [
+        [
+          {
+            "node": "Respond With Outputs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark Unsupported Type": {
+      "main": [
+        [
+          {
+            "node": "Aggregate Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Text Input": {
+      "main": [
+        [
+          {
+            "node": "Validate Source & Types",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ollama Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Normalize & Verify Input",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ollama Chat Model1": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Content Generation Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ollama Chat Model2": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Accuracy Checking Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "timeSavedMode": "fixed",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "versionId": "b5d40e5e-c3d1-4242-9740-6ae96d49ccdd",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "cd4c95cc89ecd0ba4e3611527d877c6062515a5cccbcdda43d39d41c609e097f"
+  },
+  "nodeGroups": [
+    {
+      "id": "e13e3b25-6b8f-4221-835d-6e714c9a4e5c",
+      "name": "Ingest & prepare requests",
+      "nodeIds": [
+        "d9ad4163-368f-4894-befb-92aaf799537b",
+        "c8067ecd-6cdc-461e-9025-5e593bfb654c",
+        "d20f25ba-f8ea-412b-9070-caa91f92ae9e",
+        "c3450814-6e75-42a4-9217-f4b07e65399d",
+        "3fc870af-5538-44b0-bb04-d5d3f39de3b0",
+        "de80122a-b30f-4530-b887-985ae82db9c7",
+        "19ef03d1-cb79-4144-b1eb-97aef9141ccc"
+      ],
+      "description": "Reads text and/or PDF uploads from POST /transform into one combined source, returning a 400 error if the source or output types are missing."
+    },
+    {
+      "id": "03f7954f-ee53-40df-ba6d-6c3be832d699",
+      "name": "Normalize & verify facts",
+      "nodeIds": [
+        "1d55ceb5-bb24-4655-af7a-21468aa8bd24",
+        "48704130-6344-4dea-8bbf-b552f56d3714",
+        "a0f25921-26ab-4f33-b838-ebc3d142c57c"
+      ],
+      "description": "Corrects spelling and misspelled or mismatched names/titles in the source, keeps the raw original for audit, and logs every correction made."
+    },
+    {
+      "id": "56e48766-ed2a-40f7-a609-da9ff94f5fb9",
+      "name": "Resolve output types",
+      "nodeIds": [
+        "c246b8aa-0277-4d35-92be-6fc3c2f1e16a",
+        "f519a96b-f04a-4944-a1b0-28a101d97680",
+        "1a81aa15-b235-4f66-9de0-1ac9efd3a7b9"
+      ],
+      "description": "Splits each requested output type into its own item and maps it to the structured, format-specific prompt template."
+    },
+    {
+      "id": "ee0d26b1-ef68-457c-91f4-6406474dbfe2",
+      "name": "Generate & fact-check loop",
+      "nodeIds": [
+        "32f6a233-dfe1-463b-9e42-17fe23d22ef1",
+        "982a07c5-e289-4a09-8dab-d3bac6595ab4",
+        "31b32567-1e8e-41f2-8fe2-444b09d3dae7",
+        "d74f7570-6b1f-4b98-9900-1cea0685a8b6",
+        "e710be45-0ec2-4c85-a425-f71d0697f314",
+        "7827d534-a8ab-4a51-801d-521e7f10c675",
+        "ad19bc21-7714-4115-b492-b59b9d3c688a"
+      ],
+      "description": "Generates each output, a separate auditor flags unsupported claims, and the feedback drives regeneration — up to 3 attempts until verified."
+    },
+    {
+      "id": "537d4d49-fd65-47b5-a39b-5bd3649b1608",
+      "name": "Aggregate & respond",
+      "nodeIds": [
+        "dbc5cc41-6bc5-47ef-bf22-0b64fa79fa02",
+        "3e2eedb5-1f60-40ae-9c16-060c30143ab6"
+      ],
+      "description": "Combines every output type with its final verification status into one JSON array returned to the caller."
+    }
+  ],
+  "id": "rvSW4AHAyPU6clkQ",
+  "tags": []
+}
